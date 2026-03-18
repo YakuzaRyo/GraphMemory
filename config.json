@@ -1,0 +1,51 @@
+{
+  "server": {
+    "listen_addr": "127.0.0.1",
+    "listen_port": 8080
+  },
+  "api": {
+    "active": "minimax",
+    "configs": {
+      "minimax": {
+        "provider": "MiniMax",
+        "endpoint": "https://api.minimaxi.com/anthropic",
+        "api_key": "sk-cp-q213ayuZalT7kOr7JpKYcq2IwmBxeJ7xC9qVezBCrAgXAsA2yWoNAinEyTFiAW8jqAsSwvFnxwpUZVgYkW3_xtw0kDzxY8dffE_iZlJRYF0Hdwz8Ch-lFaE",
+        "default_model": "MiniMax-M2.1"
+      },
+      "anthropic": {
+        "provider": "Anthropic",
+        "endpoint": "https://api.anthropic.com",
+        "api_key": "",
+        "default_model": "claude-3-5-sonnet-20241022"
+      },
+      "openai": {
+        "provider": "OpenAI",
+        "endpoint": "https://api.openai.com",
+        "api_key": "",
+        "default_model": "gpt-4o"
+      }
+    }
+  },
+  "memory": {
+    "initial_memories": [
+      {
+        "content": "Rust 所有权系统：每个值有唯一所有者，所有权可转移或借用",
+        "summary": "Rust所有权系统"
+      },
+      {
+        "content": "借用检查器在编译时验证引用有效性，防止数据竞争",
+        "summary": "借用检查器"
+      },
+      {
+        "content": "生命周期标注描述引用的有效时间范围",
+        "summary": "生命周期"
+      }
+    ],
+    "max_context_tokens": 4000,
+    "relevance_threshold": 0.0
+  },
+  "logging": {
+    "level": "debug",
+    "file": "logs/graphmemory.log"
+  }
+}
