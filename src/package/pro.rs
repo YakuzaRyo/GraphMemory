@@ -32,6 +32,26 @@ impl Pro {
     pub fn set_doc(&mut self, doc: &str) {
         self.doc = doc.to_string();
     }
+
+    /// Get the primary summary (first export or doc)
+    pub fn summary(&self) -> String {
+        if !self.exports.is_empty() {
+            self.exports[0].clone()
+        } else if !self.doc.is_empty() {
+            self.doc.split('\n').next().unwrap_or(&self.doc).to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    /// Set summary as the first export
+    pub fn set_summary(&mut self, summary: &str) {
+        if self.exports.is_empty() {
+            self.exports.push(summary.to_string());
+        } else {
+            self.exports[0] = summary.to_string();
+        }
+    }
 }
 
 impl Default for Pro {

@@ -5,11 +5,17 @@
 // - LLM 只看到展开后的记忆内容 Vec<String>
 // - 摘要序列 (SummarySequence) 是唯一的"句柄"
 //
+// 上下文倒置：
+// - 传统：会话/Agent 持有上下文
+// - 上下文倒置：产物/数据持有上下文
+// - LLM 眼里只有"完美成功"的历史
+//
 // 数据流：
 //   MemoryGraph (完整图结构)
 //         │
 //         ▼
-//   LatentGraph::to_llm_content()  // 只返回展开的内容
+//   LatentGraph::query()      // 检索相关节点
+//   LatentGraph::get_full_context()  // 获取完整上下文（含依赖）
 //         │
 //         ▼
 //   Vec<String> (LLM 可见)
@@ -25,6 +31,8 @@ use crate::context::SummarySequence;
 /// LLM 永远不直接看到图结构，只能通过以下方式访问：
 /// 1. expand() - 展开摘要序列为具体内容
 /// 2. to_llm_context() - 生成 LLM 可见的上下文
+/// 3. find_relevant_packages() - 根据需求查找相关包（上下文倒置）
+/// 4. get_full_context() - 获取某个包的完整上下文（含所有依赖）
 pub struct LatentGraph<'a> {
     graph: &'a MemoryGraph,
 }
@@ -56,6 +64,99 @@ impl<'a> LatentGraph<'a> {
         }
     }
 
+    /// 上下文倒置检索：根据需求查找相关包
+    ///
+    /// 这是上下文倒置的核心：
+    /// - 输入是需求描述（pro 层）
+    /// - 输出是相关的包及其完整上下文
+    ///
+    /// 返回 (NodeId, 完整上下文) 列表
+    pub fn find_relevant_packages(&self, query: &str, max_results: usize) -> Vec<(NodeId, String)> {
+        let query_lower = query.to_lowercase();
+        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+
+        // 计算每个节点的相关性得分
+        let all_ids = self.graph.all_node_ids();
+        let mut scored: Vec<(NodeId, f32)> = Vec::new();
+
+        for id in all_ids {
+            if let Some(node) = self.graph.get_node(id) {
+                let score = if query_words.is_empty() {
+                    1.0
+                } else {
+                    // 同时匹配 pro.summary, ada.implementation
+                    self.calculate_relevance(&node.summary(), &node.content(), &query_words)
+                };
+                if score > 0.0 {
+                    scored.push((id, score));
+                }
+            }
+        }
+
+        // 按得分降序排序
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // 获取前 max_results 个的完整上下文
+        scored
+            .into_iter()
+            .take(max_results)
+            .filter_map(|(id, _)| {
+                self.graph.get_full_context(id)
+                    .map(|ctx| (id, ctx))
+            })
+            .collect()
+    }
+
+    /// 获取单个包的完整上下文（包含所有依赖）
+    /// 上下文倒置：上下文归产物持有，不是会话持有
+    pub fn get_full_context(&self, id: NodeId) -> Option<String> {
+        self.graph.get_full_context(id)
+    }
+
+    /// 合并多个包的上下文（用于复杂查询）
+    pub fn merge_contexts(&self, ids: &[NodeId]) -> String {
+        let mut contexts = Vec::new();
+
+        for id in ids {
+            if let Some(ctx) = self.graph.get_full_context(*id) {
+                contexts.push(ctx);
+            }
+        }
+
+        if contexts.is_empty() {
+            String::from("没有找到相关记忆。")
+        } else {
+            contexts.join("\n\n")
+        }
+    }
+
+    /// 生成完美历史上下文
+    ///
+    /// 特点：
+    /// - 只展示成功的路径
+    /// - 隐藏失败尝试
+    /// - 每个 LLM 眼里只有"每步都完美"的历史
+    pub fn generate_perfect_history(&self, ids: &[NodeId]) -> String {
+        let mut history_parts = Vec::new();
+
+        for (i, id) in ids.iter().enumerate() {
+            if let Some(node) = self.graph.get_node(*id) {
+                history_parts.push(format!(
+                    "[步骤 {}] {} - 完成\n{}",
+                    i + 1,
+                    node.summary(),
+                    node.content()
+                ));
+            }
+        }
+
+        if history_parts.is_empty() {
+            String::from("历史记录为空。")
+        } else {
+            format!("完美执行历史：\n{}", history_parts.join("\n---\n"))
+        }
+    }
+
     /// 从查询获取相关记忆（基于关键词相关性过滤）
     ///
     /// 提高信噪比：
@@ -66,11 +167,8 @@ impl<'a> LatentGraph<'a> {
         let query_lower = query.to_lowercase();
         let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
-        eprintln!("[DEBUG] latent.query: query={}, query_words={:?}, max_memories={}", query, query_words, max_memories);
-
         // 计算每个节点的相关性得分
         let all_ids = self.graph.all_node_ids();
-        eprintln!("[DEBUG] latent.query: total_nodes={}", all_ids.len());
 
         let mut scored: Vec<(NodeId, f32)> = Vec::new();
 
@@ -80,16 +178,13 @@ impl<'a> LatentGraph<'a> {
                     // 空查询返回所有记忆，得分为1.0
                     1.0
                 } else {
-                    self.calculate_relevance(&node.summary, &node.content, &query_words)
+                    self.calculate_relevance(&node.summary(), &node.content(), &query_words)
                 };
-                eprintln!("[DEBUG] latent.query: node_id={:?}, summary={}, score={}", id, node.summary, score);
                 if score > 0.0 {
                     scored.push((id, score));
                 }
             }
         }
-
-        eprintln!("[DEBUG] latent.query: scored_nodes={}", scored.len());
 
         // 按得分降序排序
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -100,8 +195,6 @@ impl<'a> LatentGraph<'a> {
             .take(max_memories)
             .map(|(id, _)| id)
             .collect();
-
-        eprintln!("[DEBUG] latent.query: returning {} memories", relevant_ids.len());
 
         let seq = SummarySequence::new(relevant_ids);
         self.expand(&seq)
@@ -140,7 +233,6 @@ impl<'a> LatentGraph<'a> {
                 if content_lower.contains(&word_lower) {
                     score += 1.5;
                 }
-                // 3. 如果包含"记得"、"知道"等词，提取概念匹配
                 // 提取查询中的关键概念（中文字符重叠）
                 let query_chars: Vec<char> = word_lower.chars().filter(|c| c.is_alphanumeric()).collect();
                 let summary_chars: Vec<char> = summary_lower.chars().filter(|c| c.is_alphanumeric()).collect();
@@ -260,6 +352,12 @@ impl<'a> LatentGraph<'a> {
             .map(|(neighbor_id, _)| neighbor_id)
             .collect()
     }
+
+    /// 获取拓扑排序结果（内部使用）
+    #[allow(dead_code)]
+    pub fn topological_order(&self) -> Result<Vec<NodeId>, crate::graph::GraphError> {
+        self.graph.topological_sort()
+    }
 }
 
 #[cfg(test)]
@@ -350,9 +448,9 @@ mod tests {
         let graph = create_test_graph();
         let latent = LatentGraph::new(&graph);
 
-        // 空查询返回空
+        // 空查询返回所有
         let results = latent.query("", 2);
-        assert!(results.is_empty());
+        assert!(!results.is_empty()); // 修复：空查询现在返回所有
     }
 
     #[test]
@@ -384,5 +482,42 @@ mod tests {
         let seq = SummarySequence::new(vec![NodeId(1)]);
         let content = latent.to_llm_context(&seq);
         assert!(!content.contains("neighbors"));
+    }
+
+    #[test]
+    fn test_context_inversion() {
+        let graph = create_test_graph();
+        let latent = LatentGraph::new(&graph);
+
+        // 测试 find_relevant_packages
+        let results = latent.find_relevant_packages("Rust", 2);
+        assert!(!results.is_empty());
+        assert!(results[0].1.contains("Rust"));
+
+        // 测试 get_full_context
+        let full_ctx = latent.get_full_context(NodeId(1));
+        assert!(full_ctx.is_some());
+        assert!(full_ctx.unwrap().contains("Rust"));
+    }
+
+    #[test]
+    fn test_merge_contexts() {
+        let graph = create_test_graph();
+        let latent = LatentGraph::new(&graph);
+
+        let merged = latent.merge_contexts(&[NodeId(1), NodeId(2)]);
+        assert!(merged.contains("Rust"));
+        assert!(merged.contains("所有权"));
+    }
+
+    #[test]
+    fn test_perfect_history() {
+        let graph = create_test_graph();
+        let latent = LatentGraph::new(&graph);
+
+        let history = latent.generate_perfect_history(&[NodeId(1), NodeId(2)]);
+        assert!(history.contains("步骤 1"));
+        assert!(history.contains("步骤 2"));
+        assert!(history.contains("完成"));
     }
 }

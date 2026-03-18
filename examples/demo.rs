@@ -229,13 +229,7 @@ $1 "$2" "$3""#.to_string(),
     };
 
     // 组装 MemoryPackage
-    let package = MemoryPackage {
-        id: "math-tool-v1".to_string(),
-        pro,
-        ada,
-        shell,
-        dependencies: vec![],
-    };
+    let package = MemoryPackage::with_layers("math-tool-v1".to_string(), pro, ada, shell);
 
     println!("MemoryPackage 演示:");
     println!("  ID: {}", package.id);

@@ -22,7 +22,7 @@ impl SummarySequence {
     pub fn expand(&self, graph: &MemoryGraph) -> Vec<String> {
         self.node_ids
             .iter()
-            .filter_map(|id| graph.get_node(*id).map(|n| n.content.clone()))
+            .filter_map(|id| graph.get_node(*id).map(|n| n.content()))
             .collect()
     }
 

@@ -4,8 +4,10 @@
 
 use crate::api::{ApiConfig, ApiInfo, ApiManager};
 use crate::context::SummarySequence;
-use crate::graph::{LatentGraph, MemoryGraph};
+use crate::graph::{LatentGraph, MemoryGraph, NodeId, MemoryEdge, RelationType};
 use crate::CacheManager;
+use crate::persistence::MemoryPersistence;
+use crate::package::MemoryPackage;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -24,6 +26,10 @@ pub struct ProxyConfig {
     pub max_context_tokens: usize,
     /// 是否启用缓存
     pub cache_enabled: bool,
+    /// 记忆持久化文件路径
+    pub persistence_path: String,
+    /// 是否自动保存记忆
+    pub auto_save: bool,
 }
 
 impl Default for ProxyConfig {
@@ -34,6 +40,8 @@ impl Default for ProxyConfig {
             target_api: "default".to_string(),
             max_context_tokens: 4000,
             cache_enabled: true,
+            persistence_path: "memories.json".to_string(),
+            auto_save: true,
         }
     }
 }
@@ -44,6 +52,7 @@ pub struct ProxyState {
     pub memory_graph: RwLock<MemoryGraph>,
     pub cache: RwLock<CacheManager>,
     pub http_client: Client,
+    pub persistence: MemoryPersistence,
 }
 
 impl ProxyState {
@@ -51,14 +60,26 @@ impl ProxyState {
         let mut cache = CacheManager::new();
         cache.add_layer(Box::new(crate::L1MemoryCache::new()));
 
+        let persistence = MemoryPersistence::new("memories.json");
+
+        // 尝试从文件加载记忆
+        let graph = match persistence.load() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[WARNING] Failed to load memories: {}, starting fresh", e);
+                MemoryGraph::new()
+            }
+        };
+
         ProxyState {
             api_manager: RwLock::new(ApiManager::new()),
-            memory_graph: RwLock::new(MemoryGraph::new()),
+            memory_graph: RwLock::new(graph),
             cache: RwLock::new(cache),
             http_client: Client::builder()
                 .timeout(Duration::from_secs(60))
                 .build()
                 .expect("Failed to create HTTP client"),
+            persistence,
         }
     }
 
@@ -80,13 +101,33 @@ impl ProxyState {
         manager.export_info()
     }
 
-    /// 添加记忆到图
-    pub fn add_memory(&self, content: String, summary: String) -> crate::NodeId {
+    /// 添加记忆到图（使用 MemoryPackage）
+    pub fn add_memory_package(&self, package: MemoryPackage) -> NodeId {
         let mut graph = self.memory_graph.write().unwrap();
-        let id = graph.next_node_id();
-        let node = crate::MemoryNode::new(id, content, summary, vec![]);
-        graph.add_node(node);
+        let id = graph.add_package(package);
+
+        // 自动保存
+        if let Err(e) = self.persistence.save(&graph) {
+            eprintln!("[WARNING] Failed to save memories: {}", e);
+        }
+
         id
+    }
+
+    /// 添加记忆到图（向后兼容的简单接口）
+    pub fn add_memory(&self, content: String, summary: String) -> NodeId {
+        let package = MemoryPackage::from_content(
+            format!("mem_{}", chrono::Utc::now().timestamp()),
+            summary,
+            content,
+        );
+        self.add_memory_package(package)
+    }
+
+    /// 手动保存记忆到文件
+    pub fn save_memories(&self) -> Result<(), String> {
+        let graph = self.memory_graph.read().unwrap();
+        self.persistence.save(&graph).map_err(|e| e.to_string())
     }
 
     /// 获取增强后的上下文
@@ -96,8 +137,6 @@ impl ProxyState {
 
         // 查询相关记忆
         let memories = latent.query(query, max_memories);
-
-        eprintln!("[DEBUG] get_enhanced_context: query={}, memories_found={}", query, memories.len());
 
         // 格式化为上下文
         if memories.is_empty() {
@@ -110,6 +149,13 @@ impl ProxyState {
                 .collect();
             format!("以下是相关记忆：\n{}\n\n", content.join("\n---\n"))
         }
+    }
+
+    /// 获取完整上下文（包含依赖，用于上下文倒置）
+    pub fn get_full_context(&self, node_id: NodeId) -> Option<String> {
+        let graph = self.memory_graph.read().unwrap();
+        let latent = LatentGraph::new(&graph);
+        latent.get_full_context(node_id)
     }
 
     /// 转发请求到目标 API
@@ -127,8 +173,9 @@ impl ProxyState {
 
         // 注入记忆上下文
         let context = self.get_enhanced_context(&request.get_query(), 5);
+        let context_injected = !context.is_empty();
 
-        if !context.is_empty() {
+        if context_injected {
             request.inject_context(&context);
         }
 
@@ -155,6 +202,97 @@ impl ProxyState {
 
         Ok(body)
     }
+
+    /// 从 LLM 回复中提取关键信息并自动存储为记忆
+    pub fn extract_and_store(&self, response: &str, query: &str) -> Vec<NodeId> {
+        let extracted = Self::extract_key_facts(response, query);
+
+        if extracted.is_empty() {
+            return vec![];
+        }
+
+        let mut new_ids = vec![];
+
+        for fact in extracted {
+            let package = MemoryPackage::from_content(
+                format!("fact_{}", chrono::Utc::now().timestamp_millis()),
+                fact.summary.clone(),
+                fact.content,
+            );
+
+            let id = self.add_memory_package(package);
+            new_ids.push(id);
+        }
+
+        new_ids
+    }
+
+    /// 从回复中提取关键事实
+    fn extract_key_facts(response: &str, _query: &str) -> Vec<ExtractedFact> {
+        let mut facts = vec![];
+
+        // 简单的事实提取策略：
+        // 1. 提取包含用户信息的句子
+        // 2. 提取包含项目/技术信息的句子
+        // 3. 提取包含决策/结论的句子
+
+        let lines: Vec<&str> = response.lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+
+        for line in lines {
+            // 跳过太短的行
+            if line.len() < 10 {
+                continue;
+            }
+
+            // 跳过明显的系统消息
+            if line.contains("<system")
+                || line.contains("[SUGGESTION")
+                || line.contains("TRIGGER")
+                || line.contains("DO NOT TRIGGER")
+            {
+                continue;
+            }
+
+            // 检查是否包含关键信息模式
+            let has_key_info =
+                line.contains("用户") ||
+                line.contains("我使用") ||
+                line.contains("编程语言") ||
+                line.contains("项目") ||
+                line.contains("框架") ||
+                line.contains("使用") && line.contains("语言") ||
+                line.contains("配置") ||
+                line.contains("设置") ||
+                line.contains("决定") ||
+                line.contains("选择");
+
+            if has_key_info {
+                let summary = if line.len() > 50 {
+                    format!("{}...", &line[..50])
+                } else {
+                    line.to_string()
+                };
+
+                facts.push(ExtractedFact {
+                    summary,
+                    content: line.to_string(),
+                });
+            }
+        }
+
+        // 去重
+        facts.dedup_by(|a, b| a.summary == b.summary);
+
+        facts
+    }
+}
+
+/// 从回复中提取的事实
+struct ExtractedFact {
+    summary: String,
+    content: String,
 }
 
 impl Default for ProxyState {

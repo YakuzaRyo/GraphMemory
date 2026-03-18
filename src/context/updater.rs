@@ -25,7 +25,7 @@ impl<'a> MemoryUpdater<'a> {
                 if relevance > RELEVANCE_THRESHOLD {
                     let edge = MemoryEdge::new(RelationType::RelatedTo, relevance);
                     let new_id = self.graph.next_node_id();
-                    let node = MemoryNode::new(new_id, memory.content.clone(), memory.summary.clone(), memory.summary_embedding.clone());
+                    let node = MemoryNode::new(new_id, memory.content(), memory.summary(), vec![]);
                     self.graph.add_node(node);
                     let _ = self.graph.add_edge(new_id, *prev_id, edge);
                     new_ids.push(new_id);
@@ -54,9 +54,9 @@ impl<'a> MemoryUpdater<'a> {
 
     fn calculate_relevance(&self, memory: &MemoryNode, prev_id: &NodeId) -> f32 {
         if let Some(prev) = self.graph.get_node(*prev_id) {
-            let common: usize = memory.summary
+            let common: usize = memory.summary()
                 .split_whitespace()
-                .filter(|w| prev.summary.contains(*w))
+                .filter(|w| prev.summary().contains(w))
                 .count();
             // Base relevance + word match bonus
             0.1 + (common as f32) * 0.2

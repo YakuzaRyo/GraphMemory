@@ -64,14 +64,14 @@ struct MemoryPackage {
 - [x] 相关性检索（中文 bigram/字符重叠）
 - [x] 上下文注入到 LLM 请求
 - [x] MiniMax API 集成
+- [x] **记忆包结构（pro/ada/shell）** - MemoryPackage 同构工程包
+- [x] **DAG 依赖管理** - 拓扑排序、循环检测
+- [x] **上下文倒置检索机制** - find_relevant_packages, get_full_context, merge_contexts
+- [x] **记忆持久化** - JSON 文件加载/保存
+- [x] **自动记忆提取** - 从 LLM 回复中提取关键信息
 
 ### 2.2 待实现
 
-- [ ] 记忆包结构（pro/ada/shell）
-- [ ] DAG 依赖管理
-- [ ] 上下文倒置检索机制
-- [ ] 记忆持久化（JSON 文件）
-- [ ] 自动记忆提取（对话后自动分析）
 - [ ] 多 Agent 协作框架
 
 ## 三、后续目标

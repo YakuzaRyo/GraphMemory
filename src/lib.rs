@@ -3,6 +3,7 @@ pub mod cache;
 pub mod context;
 pub mod package;
 pub mod api;
+pub mod persistence;
 
 pub use graph::{MemoryGraph, MemoryNode, MemoryEdge, NodeId, RelationType, GraphError, LatentGraph};
 pub use cache::{
@@ -18,4 +19,7 @@ pub use api::{
 };
 pub use api::proxy::{
     ProxyState, ProxyConfig, ProxyRequest, ProxyResponse, ProxyError, ProxyStats,
+};
+pub use persistence::{
+    MemoryPersistence, PersistenceError, GraphSnapshot, export_to_json,
 };

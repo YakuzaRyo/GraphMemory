@@ -303,7 +303,10 @@ mod tests {
         manager.add_config("anthropic".to_string(), ApiConfig::anthropic("key1".to_string(), None));
         manager.add_config("minimax".to_string(), ApiConfig::minimax("key2".to_string(), None));
 
-        assert_eq!(manager.list_configs(), vec!["anthropic".to_string(), "minimax".to_string()]);
+        let configs = manager.list_configs();
+        assert!(configs.contains(&"anthropic".to_string()));
+        assert!(configs.contains(&"minimax".to_string()));
+        assert_eq!(configs.len(), 2);
 
         manager.activate("minimax").unwrap();
         assert!(matches!(manager.get_active().unwrap().provider, ApiProvider::MiniMax));

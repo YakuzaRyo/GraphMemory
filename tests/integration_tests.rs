@@ -76,7 +76,7 @@ fn test_memory_graph_basic() {
     // Get node
     let retrieved = graph.get_node(NodeId(1));
     assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().content, "Test content 1");
+    assert_eq!(retrieved.unwrap().content(), "Test content 1");
 
     // Traverse
     let traversed = graph.traverse(&[NodeId(1)], 10);
