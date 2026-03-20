@@ -9,8 +9,8 @@
       "minimax": {
         "provider": "MiniMax",
         "endpoint": "https://api.minimaxi.com/anthropic",
-        "api_key": "sk-cp-q213ayuZalT7kOr7JpKYcq2IwmBxeJ7xC9qVezBCrAgXAsA2yWoNAinEyTFiAW8jqAsSwvFnxwpUZVgYkW3_xtw0kDzxY8dffE_iZlJRYF0Hdwz8Ch-lFaE",
-        "default_model": "MiniMax-M2.1"
+        "api_key": "",
+        "default_model": "MiniMax-M2.7"
       },
       "anthropic": {
         "provider": "Anthropic",
